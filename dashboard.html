@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ChronoLSM-KV — Live Causal DAG & MVCC Inspector</title>
+<style>
+  :root { --bg: #0b0f19; --card: #111827; --border: #1f2937; --accent: #38bdf8; --green: #4ade80; --amber: #fbbf24; --red: #f87171; --text: #f3f4f6; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "JetBrains Mono", monospace; background: var(--bg); color: var(--text); margin: 0; padding: 24px; }
+  h1 { font-size: 20px; margin: 0 0 8px 0; color: var(--accent); display: flex; align-items: center; justify-content: space-between; }
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin: 16px 0; }
+  .stat { background: var(--card); border: 1px solid var(--border); padding: 14px 16px; border-radius: 10px; }
+  .stat-label { font-size: 11px; color: #9ca3af; text-transform: uppercase; }
+  .stat-val { font-size: 26px; font-weight: 700; margin-top: 4px; color: var(--green); }
+  .dag-panel { background: #050811; border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px; overflow-x: auto; }
+  .dag-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; font-size: 13px; color: #9ca3af; }
+  .legend { display: flex; gap: 16px; font-size: 12px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .console { background: var(--card); border: 1px solid var(--border); padding: 16px; border-radius: 10px; }
+  .row { display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+  input { flex: 1; background: #030712; border: 1px solid #374151; color: #fff; padding: 10px 14px; border-radius: 6px; font-family: inherit; font-size: 14px; }
+  button { background: var(--accent); color: #000; border: none; padding: 10px 16px; border-radius: 6px; font-weight: 700; cursor: pointer; font-family: inherit; transition: 0.15s; }
+  button:hover { opacity: 0.9; transform: translateY(-1px); }
+  button.secondary { background: #1f2937; color: #e5e7eb; border: 1px solid #374151; }
+  button.danger { background: var(--red); color: #000; }
+  button.sim { background: var(--green); color: #000; }
+  pre { background: #030712; padding: 12px; border-radius: 8px; overflow-x: auto; border: 1px solid var(--border); font-size: 12px; line-height: 1.5; color: #a7f3d0; margin-top: 12px; }
+  .card-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+  .mem-card { background: #030712; border-left: 4px solid var(--accent); padding: 10px 14px; border-radius: 6px; display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
+  .badge { font-size: 11px; padding: 3px 8px; border-radius: 4px; background: #1e293b; color: var(--accent); margin-left: 8px; font-weight: 600; }
+</style>
+</head>
+<body>
+  <h1>
+    <span>⚡ ChronoLSM-KV v0.1 — Live Causal DAG & MVCC Inspector</span>
+    <button class="sim" onclick="runFullSimulation()">▶ Run Visual DAG Simulation</button>
+  </h1>
+
+  <div class="grid">
+    <div class="stat"><div class="stat-label">L0 MemTable Nodes</div><div class="stat-val" id="l0">-</div></div>
+    <div class="stat"><div class="stat-label">L1 SSTable Rules</div><div class="stat-val" id="l1">-</div></div>
+    <div class="stat"><div class="stat-label">Active MVCC Branches</div><div class="stat-val" id="branches">-</div></div>
+    <div class="stat"><div class="stat-label">Cascaded Tombstones</div><div class="stat-val" id="inv" style="color:var(--red)">-</div></div>
+  </div>
+
+  <div class="dag-panel">
+    <div class="dag-header">
+      <strong>LIVE NEURO-SYMBOLIC CAUSAL DAG & MVCC TIMELINE (Click any node to inspect)</strong>
+      <div class="legend">
+        <span><i class="dot" style="background:#4ade80"></i> Verified Fact (L0/L1)</span>
+        <span><i class="dot" style="background:#fbbf24"></i> Speculative Hypothesis</span>
+        <span><i class="dot" style="background:#f87171"></i> Refuted / Cascaded Tombstone</span>
+      </div>
+    </div>
+    <svg id="dagSvg" width="100%" height="260" style="min-width: 900px; display: block;"></svg>
+  </div>
+
+  <div class="console">
+    <div class="row">
+      <input id="dslInput" value="RECALL ON 0 TOP 5 &quot;write ahead log WAL CRC32&quot;" />
+      <button onclick="runDsl()">Execute DSL</button>
+    </div>
+    <div class="row">
+      <button class="secondary" onclick="quickCmd('FORK 99 FROM 0')">1. Fork Branch 99</button>
+      <button class="secondary" onclick="quickCmd('COMMIT HYP(0.75) ON 99 DEPS [2] "Latency spike caused by DB pool exhaustion"')">2. Commit Root Hyp (B99)</button>
+      <button class="secondary" onclick="quickCmd('COMMIT HYP(0.70) ON 99 DEPS [8] "Increase SQLAlchemy pool_size to 200"')">3. Commit Dependent Plan (B99)</button>
+      <button class="secondary" onclick="quickCmd('RECALL ON 99 TOP 5 "Latency spike DB pool SQLAlchemy WAL"')">4. Recall Branch 99</button>
+      <button class="danger" onclick="quickCmd('REFUTE [8] ON 99 "pg_stat_activity shows 3 idle connections; DB pool is fine"')">5. Refute & Cascade Evict</button>
+      <button class="secondary" onclick="quickCmd('COMPACT 0.45')">6. Compact L0->L1</button>
+      <button class="sim" onclick="runMergeDemo()">7. Fork & Merge Success (B2 -> B0)</button>
+      <button style="background:#a855f7;color:#fff" onclick="quickCmd('BENCHMARK 25000')">⚡ Run 25K M4 Benchmark</button>
+    </div>
+    <div id="results" class="card-list"></div>
+    <pre id="rawOut">Connecting to ChronoLSM-KV on 127.0.0.1:7878...</pre>
+  </div>
+
+<script>
+const API = "http://127.0.0.1:7878";
+
+async function refreshAll() {
+  try {
+    const [stRes, dagRes] = await Promise.all([
+      fetch(API + "/v1/status"),
+      fetch(API + "/v1/dag")
+    ]);
+    const st = await stRes.json();
+    const dag = await dagRes.json();
+
+    document.getElementById("l0").innerText = st.l0_memtable_count;
+    document.getElementById("l1").innerText = st.l1_sstable_count;
+    document.getElementById("branches").innerText = st.active_branches;
+    document.getElementById("inv").innerText = (st.invalidated_txs || []).length + " [" + (st.invalidated_txs || []).join(", ") + "]";
+
+    renderDagSvg(dag);
+  } catch (e) {
+    document.getElementById("rawOut").innerText = "Server offline! Make sure SERVE is running in Terminal 1.";
+  }
+}
+
+function renderDagSvg(dag) {
+  const svg = document.getElementById("dagSvg");
+  const branches = dag.branches || [];
+  const nodes = dag.nodes || [];
+
+  const rowHeight = 75;
+  const svgHeight = Math.max(220, branches.length * rowHeight + 40);
+  svg.setAttribute("height", svgHeight);
+
+  const branchRow = {};
+  branches.forEach((b, idx) => { branchRow[b.id] = idx; });
+
+  let html = `<defs>
+    <marker id="arrow-ok" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#38bdf8"/>
+    </marker>
+    <marker id="arrow-bad" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#f87171"/>
+    </marker>
+  </defs>`;
+
+  // Draw horizontal swimlanes per MVCC Branch
+  branches.forEach((b, idx) => {
+    const y = 50 + idx * rowHeight;
+    html += `<line x1="130" y1="${y}" x2="1150" y2="${y}" stroke="#1f2937" stroke-width="2" stroke-dasharray="6,6" />`;
+    html += `<rect x="10" y="${y - 16}" width="110" height="32" rx="6" fill="#111827" stroke="#374151" />`;
+    html += `<text x="65" y="${y + 4}" fill="#38bdf8" font-size="12" font-weight="bold" text-anchor="middle">Branch ${b.id}</text>`;
+  });
+
+  // Compute (x, y) coordinates for every thought node
+  const pos = {};
+  nodes.forEach((n, idx) => {
+    const bIdx = branchRow[n.branch] !== undefined ? branchRow[n.branch] : 0;
+    const x = 190 + idx * 175;
+    const y = 50 + bIdx * rowHeight;
+    pos[n.tx_id] = { x, y, node: n };
+  });
+
+  // Draw Causal Dependency Edges (Curved Bezier Arrows)
+  nodes.forEach(n => {
+    const target = pos[n.tx_id];
+    (n.deps || []).forEach(depId => {
+      const src = pos[depId];
+      if (src && target) {
+        const x1 = src.x + 68;
+        const y1 = src.y;
+        const x2 = target.x - 68;
+        const y2 = target.y;
+        const cx = (x1 + x2) / 2;
+        const isBad = n.invalidated || src.node.invalidated;
+        const color = isBad ? "#f87171" : "#38bdf8";
+        const dash = isBad ? "5,4" : "none";
+        const marker = isBad ? "url(#arrow-bad)" : "url(#arrow-ok)";
+        html += `<path d="M ${x1} ${y1} C ${cx} ${y1}, ${cx} ${y2}, ${x2} ${y2}" fill="none" stroke="${color}" stroke-width="2.2" stroke-dasharray="${dash}" marker-end="${marker}" />`;
+      }
+    });
+  });
+
+  // Draw Thought Nodes
+  nodes.forEach(n => {
+    const { x, y } = pos[n.tx_id];
+    let fill = "#064e3b";
+    let stroke = "#4ade80";
+    let badge = n.tier + " FACT";
+
+    if (n.state.startsWith("HYP")) {
+      fill = "#451a03";
+      stroke = "#fbbf24";
+      badge = n.state;
+    }
+    if (n.invalidated) {
+      fill = "#450a0a";
+      stroke = "#f87171";
+      badge = n.state === "TOMBSTONE" ? "TOMBSTONE" : "EVICTED (DAG)";
+    }
+
+    const shortText = n.payload.length > 19 ? n.payload.substring(0, 19) + "…" : n.payload;
+    const strike = n.invalidated ? "line-through" : "none";
+    const dash = n.invalidated ? "4,3" : "none";
+
+    html += `<g style="cursor:pointer" onclick="inspectNode(${n.tx_id})">
+      <rect x="${x - 66}" y="${y - 26}" width="132" height="52" rx="8" fill="${fill}" stroke="${stroke}" stroke-width="2" stroke-dasharray="${dash}" />
+      <text x="${x - 56}" y="${y - 8}" fill="${stroke}" font-size="11" font-weight="bold">Tx #${n.tx_id} [${badge}]</text>
+      <text x="${x - 56}" y="${y + 12}" fill="#f3f4f6" font-size="11" text-decoration="${strike}">${shortText}</text>
+    </g>`;
+  });
+
+  svg.innerHTML = html;
+  window._dagNodes = pos;
+}
+
+function inspectNode(txId) {
+  const entry = window._dagNodes && window._dagNodes[txId];
+  if (!entry) return;
+  document.getElementById("rawOut").innerText = "INSPECTING DAG NODE Tx #" + txId + ":\n\n" + JSON.stringify(entry.node, null, 2);
+}
+
+async function execQuery(cmd) {
+  const r = await fetch(API + "/v1/query", {
+    method: "POST",
+    headers: {"Content-Type": "text/plain"},
+    body: cmd
+  });
+  return await r.json();
+}
+
+async function runDsl() {
+  const cmd = document.getElementById("dslInput").value;
+  const d = await execQuery(cmd);
+  document.getElementById("rawOut").innerText = "DSL > " + cmd + "\n\n" + JSON.stringify(d, null, 2);
+  const container = document.getElementById("results");
+  if (d.op === "BENCHMARK") {
+    container.innerHTML = `<div class="mem-card" style="border-left-color:#a855f7">
+      <div><strong>⚡ Apple Silicon Benchmark (${d.nodes_tested.toLocaleString()} nodes)</strong></div>
+      <div>
+        <span class="badge" style="color:#4ade80">MVCC Commits: ${Number(d.commits_per_sec).toLocaleString()}/sec</span>
+        <span class="badge" style="color:#38bdf8">LSH Vector Queries: ${Number(d.lsh_queries_per_sec).toLocaleString()}/sec</span>
+        <span class="badge" style="color:#f87171">Causal DAG Evictions: ${Number(d.dag_evictions_per_sec).toLocaleString()}/sec</span>
+      </div>
+    </div>`;
+  } else if (d.results) {
+    container.innerHTML = "";
+    if (d.results.length === 0) {
+      container.innerHTML = `<div class="mem-card" style="border-left-color:var(--amber)">No visible memories matched (or all matching hypotheses were causally evicted!).</div>`;
+    }
+    d.results.forEach(item => {
+      container.innerHTML += `<div class="mem-card">
+        <div><strong>Tx #${item.tx_id}</strong> <span style="color:#9ca3af">(Branch ${item.branch})</span> — ${item.payload}</div>
+        <div>
+          <span class="badge">Sim: ${item.similarity}</span>
+          <span class="badge" style="color:var(--green)">KV-Cache: ${item.kv_cache_bytes}B</span>
+        </div>
+      </div>`;
+    });
+  }
+  await refreshAll();
+  return d;
+}
+
+function quickCmd(c) {
+  document.getElementById("dslInput").value = c;
+  return runDsl();
+}
+
+async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function runMergeDemo() {
+  await quickCmd("FORK 2 FROM 0");
+  await sleep(600);
+  await quickCmd('COMMIT HYP(0.92) ON 2 DEPS [2] "Nginx keepalive_timeout=65s resolves 502 Bad Gateway"');
+  await sleep(800);
+  await quickCmd("MERGE 2 INTO 0");
+  await sleep(600);
+  await quickCmd('RECALL ON 0 TOP 5 "Nginx keepalive 502 WAL"');
+}
+async function runFullSimulation() {
+  await quickCmd("FORK 99 FROM 0");
+  await sleep(700);
+  const h1 = await quickCmd('COMMIT HYP(0.75) ON 99 DEPS [2] "Latency spike caused by DB pool exhaustion"');
+  await sleep(900);
+  const rootTx = h1.tx_id || 8;
+  const h2 = await quickCmd(`COMMIT HYP(0.70) ON 99 DEPS [${rootTx}] "Increase SQLAlchemy pool_size to 200"`);
+  await sleep(900);
+  const childTx = h2.tx_id || (rootTx + 1);
+  await quickCmd(`COMMIT HYP(0.65) ON 99 DEPS [${childTx}] "Deploy 200 pool_size config to production"`);
+  await sleep(1000);
+  await quickCmd('RECALL ON 99 TOP 5 "Latency spike DB pool SQLAlchemy WAL"');
+  await sleep(2200);
+  await quickCmd(`REFUTE [${rootTx}] ON 99 "pg_stat_activity shows 3 idle connections; DB pool is fine"`);
+  await sleep(900);
+  await quickCmd('RECALL ON 99 TOP 5 "Latency spike DB pool SQLAlchemy WAL"');
+}
+
+refreshAll();
+runDsl();
+setInterval(refreshAll, 1500);
+</script>
+</body>
+</html>
