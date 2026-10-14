@@ -135,3 +135,60 @@ fn main() {
         }
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::{BranchId, ChronoEngine, EpistemicState, TxTimestamp};
+
+    #[test]
+    fn test_mvcc_branch_isolation_and_causal_dag_cascade() {
+        let test_wal = "test_ci.wal";
+        let _ = std::fs::remove_file(test_wal);
+        let mut engine = ChronoEngine::open(test_wal, 64).unwrap();
+
+        // 1. Commit verified fact on Main Branch 0
+        let tx1 = engine.commit_thought(
+            BranchId(0),
+            EpistemicState::VerifiedFact,
+            vec![],
+            "WAL uses IEEE CRC32 checksums",
+        ).unwrap();
+
+        // 2. Fork Branch 10 from Branch 0
+        engine.fork_branch(BranchId(0), BranchId(10)).unwrap();
+
+        // 3. Chain Hypothesis -> Dependent Action Plan on Branch 10
+        let tx_hyp = engine.commit_thought(
+            BranchId(10),
+            EpistemicState::Hypothesis { confidence: 0.75 },
+            vec![tx1],
+            "Latency spike caused by mutex contention",
+        ).unwrap();
+
+        let tx_plan = engine.commit_thought(
+            BranchId(10),
+            EpistemicState::Hypothesis { confidence: 0.70 },
+            vec![tx_hyp],
+            "Replace mutex with lock-free ringbuffer",
+        ).unwrap();
+
+        // Branch 0 must NOT see speculative thoughts from Branch 10
+        let b0_hits = engine.query_context(BranchId(0), "mutex ringbuffer", 5);
+        assert!(b0_hits.iter().all(|(_, r)| r.branch_id == BranchId(0)));
+
+        // Refute root hypothesis tx_hyp -> must automatically cascade and invalidate tx_plan!
+        engine.commit_thought(
+            BranchId(10),
+            EpistemicState::RefutedTombstone { reason: "Disproved by profiler".into() },
+            vec![tx_hyp],
+            "Disproved by profiler",
+        ).unwrap();
+
+        assert!(engine.invalidated_txs.contains(&tx_hyp));
+        assert!(engine.invalidated_txs.contains(&tx_plan));
+
+        let _ = std::fs::remove_file(test_wal);
+    }
+}

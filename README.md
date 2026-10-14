@@ -2,6 +2,7 @@
 
 **A Neuro-Symbolic, Time-Travel LSM Storage Engine for Autonomous AI Agents (100% Pure Rust)**
 
+![CI](https://github.com/nit9451/chrono-lsm-kv/actions/workflows/ci.yml/badge.svg)
 ![Rust](https://img.shields.io/badge/rust-std%20only-orange.svg)
 ![Zero Dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen.svg)
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
