@@ -37,7 +37,8 @@ ChronoLSM-KV is built entirely with the **Rust Standard Library (std)** and comp
 
 ### 1. Run the Automated 6-Stage Verification & Interactive REPL
 ```bash
-cargo run --release
+cargo run --release<img width="2940" height="1608" alt="image" src="https://github.com/user-attachments/assets/3592a2b9-68c6-4e66-8e91-6437da74151e" />
+
 ```
 
 ### 2. Start the HTTP/1.1 REST Daemon & Live Visual DAG Inspector
@@ -79,6 +80,9 @@ BENCHMARK 25000
 ```
 
 ---
+![Uploading image.png…]()<img width="1459" height="804" alt="Screenshot 2026-10-14 at 9 29 03 AM" src="https://github.com/user-attachments/assets/efbf99cf-1b3f-4ba5-adb7-64866d6c7255" />
+
+
 
 ## 📜 License
 MIT License — Copyright (c) 2026 Nitish Kumar Purohit
